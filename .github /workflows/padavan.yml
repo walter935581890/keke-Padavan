@@ -1,0 +1,383 @@
+# =============================================================================
+# 云编译 keke-Padavan 固件（MT7620 / MT7621 / MT7628，含 4.1 / 5.0.4.0 无线驱动）
+#
+# 用法：把本文件放到仓库的 .github/workflows/walterpandavan.yml
+#       Actions -> 云编译 keke-Padavan -> Run workflow
+#       选机型 + 选插件 -> 等 40~90 分钟 -> 到 Artifacts 下载 trx
+#
+# 说明：
+#   1. 机型下拉框里的名字 = trunk/configs/templates/<机型>.config，
+#      仓库新增机型后自己往 options 里加一行即可。
+#   2. 插件开关最终都写成 .config 里的 CONFIG_FIRMWARE_INCLUDE_xxx=y/n，
+#      然后以 `build_firmware_modify <机型> 0` 编译（第二参数传 0 表示
+#      不再套用源码里写死的那套插件默认值，完全按本次选择走）。
+#   3. 插件越多固件越大。8MB flash 的机型（MI-3/MI-MINI/PSG1218 等）
+#      建议只选 SS+SSOBFS；16MB 以上的机型才能选“全家桶”。
+#      Xray / V2Ray 是 Go 源码现场编译，最慢也最容易受上游影响，按需再开。
+# =============================================================================
+
+name: 云编译 walter-Padavan
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: '机型（须与 trunk/configs/templates/ 下同名）'
+        type: choice
+        required: true
+        default: 'B70'
+        options:
+          - '360P2'
+          - '5K-W20'
+          - 'A3004NS'
+          - 'B70'
+          - 'BELL-A-040W-Q'
+          - 'CR660x'
+          - 'D12G'
+          - 'DIR-878'
+          - 'DIR-882'
+          - 'E8820V2'
+          - 'HC5661'
+          - 'HC5761A'
+          - 'HC5861B'
+          - 'JCG-836PRO'
+          - 'JCG-AC860M'
+          - 'JCG-Q20'
+          - 'JCG-Y2'
+          - 'K2P'
+          - 'K2P_nano'
+          - 'K2P-USB'
+          - 'MI-3'
+          - 'MI-3C'
+          - 'MI-MINI'
+          - 'MI-NANO'
+          - 'MI-R3G'
+          - 'MI-R3P'
+          - 'MI-R3P-breed'
+          - 'MI-R4A'
+          - 'MR2600'
+          - 'MSG1500'
+          - 'MSG1500-7615'
+          - 'MZ-R13'
+          - 'MZ-R13P'
+          - 'NETGEAR-BZV'
+          - 'NETGEAR-CHJ'
+          - 'NEWIFI3'
+          - 'NEWIFI-MINI'
+          - 'OYE-001'
+          - 'PSG1208'
+          - 'PSG1218'
+          - 'PSG1218_nano'
+          - 'R2100'
+          - 'R6220'
+          - 'RM2100'
+          - 'RT-AC1200GU'
+          - 'RT-AC85P'
+          - 'WDR7300'
+          - 'WR1200JS'
+          - 'XY-C1'
+          - 'ZTE_E8820S'
+      proxy:
+        description: '科学上网插件组合（SS 为总开关，关掉后相关插件全部不集成）'
+        type: choice
+        required: true
+        default: 'SS+SSOBFS'
+        options:
+          - '无'
+          - 'SS+SSOBFS'
+          - 'SS+SSOBFS+Xray'
+          - 'SS+SSOBFS+V2Ray'
+          - 'SS+SSOBFS+Trojan'
+          - '全家桶(SS+SSOBFS+Xray+V2Ray+Trojan)'
+      adblock:
+        description: '广告过滤'
+        type: choice
+        required: true
+        default: '无'
+        options:
+          - '无'
+          - 'adbyby'
+          - 'koolproxy'
+          - 'adguardhome'
+      frp:
+        description: '内网穿透 frp'
+        type: choice
+        required: true
+        default: '无'
+        options:
+          - '无'
+          - 'frpc'
+          - 'frps'
+          - 'frpc+frps'
+      tools:
+        description: '附加命令行工具'
+        type: choice
+        required: true
+        default: '保持机型默认'
+        options:
+          - '保持机型默认'
+          - '常用工具(htop/nano/socat/tcpdump/mtr)'
+          - '全部工具(+iperf3/lrzsz/parted)'
+      zerotier:
+        description: '集成 ZeroTier（约 1.3MB，源码编译较慢）'
+        type: boolean
+        default: false
+      wireguard:
+        description: '集成 WireGuard（wireguard-go，约 0.1MB）'
+        type: boolean
+        default: false
+      smartdns:
+        description: '集成 SmartDNS'
+        type: boolean
+        default: false
+      ttyd:
+        description: '集成 ttyd 网页终端'
+        type: boolean
+        default: false
+      extra:
+        description: '额外开关，逗号/分号分隔，如 CONFIG_FIRMWARE_INCLUDE_SSSERVER=y'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.model }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    # 只允许仓库所有者本人触发，避免公开仓库被人白嫖算力
+    if: github.event.repository.owner.id == github.event.sender.id
+    env:
+      MODEL: ${{ inputs.model }}
+      PROXY: ${{ inputs.proxy }}
+      ADBLOCK: ${{ inputs.adblock }}
+      FRP: ${{ inputs.frp }}
+      TOOLS: ${{ inputs.tools }}
+      ZEROTIER: ${{ inputs.zerotier }}
+      WIREGUARD: ${{ inputs.wireguard }}
+      SMARTDNS: ${{ inputs.smartdns }}
+      TTYD: ${{ inputs.ttyd }}
+      EXTRA: ${{ inputs.extra }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装编译依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git unzip zip wget curl xz-utils bzip2 rsync bc \
+            libtool-bin gperf gawk flex bison autopoint gettext automake \
+            cpio fakeroot p7zip-full pkg-config texinfo help2man \
+            python3 python3-docutils zlib1g-dev libltdl-dev libncurses-dev \
+            libgmp-dev libmpc-dev libmpfr-dev libelf-dev device-tree-compiler
+
+      - name: 下载 mipsel 预编译工具链
+        run: |
+          cd toolchain-mipsel
+          sh dl_toolchain.sh
+          ls -d toolchain-3.4.x
+          ls toolchain-3.4.x/bin | head -5
+          cc="$(ls toolchain-3.4.x/bin/*-gcc 2>/dev/null | head -1)"
+          if [ -n "$cc" ]; then "$cc" --version | head -1; else echo "::error::工具链里没找到 gcc"; exit 1; fi
+
+      - name: 生成 .config（机型 + 插件选择）
+        run: |
+          set -euo pipefail
+          cd trunk
+
+          if [ ! -f "configs/templates/${MODEL}.config" ]; then
+            echo "::error::没有该机型配置：configs/templates/${MODEL}.config"
+            ls configs/templates | sed 's/\.config$//' | tr '\n' ' '
+            exit 1
+          fi
+          cp -f "configs/templates/${MODEL}.config" .config
+
+          # 幂等写入：同名项先删再追加（.config 里后出现的赋值生效）
+          set_opt() {
+            sed -i "/^CONFIG_FIRMWARE_INCLUDE_$1=/d" .config
+            printf 'CONFIG_FIRMWARE_INCLUDE_%s=%s\n' "$1" "$2" >> .config
+          }
+
+          # 1) 先把所有可选插件统一清零，保证结果只取决于本次选择，
+          #    不受各机型模板里的历史默认值影响
+          for k in SHADOWSOCKS XRAY V2RAY TROJAN SSOBFS SSSERVER \
+                   ADBYBY KOOLPROXY ADGUARDHOME SMARTDNS \
+                   ZEROTIER WIREGUARD FRPC FRPS \
+                   ALIDDNS CADDY CADDYBIN WYY WYYBIN \
+                   TTYD NVPPROXY SSWAN XFRM \
+                   DNSFORWARDER MENTOHUST SCUTCLIENT SRELAY \
+                   OPENSSL_EXE; do
+            set_opt "$k" n
+          done
+
+          # 2) 科学上网
+          case "$PROXY" in
+            '无') ;;                                       # SS 总开关关闭
+            'SS+SSOBFS')
+              set_opt SHADOWSOCKS y; set_opt SSOBFS y ;;
+            'SS+SSOBFS+Xray')
+              set_opt SHADOWSOCKS y; set_opt SSOBFS y; set_opt XRAY y ;;
+            'SS+SSOBFS+V2Ray')
+              set_opt SHADOWSOCKS y; set_opt SSOBFS y; set_opt V2RAY y ;;
+            'SS+SSOBFS+Trojan')
+              set_opt SHADOWSOCKS y; set_opt SSOBFS y; set_opt TROJAN y ;;
+            '全家桶'*)
+              set_opt SHADOWSOCKS y; set_opt SSOBFS y
+              set_opt XRAY y; set_opt V2RAY y; set_opt TROJAN y ;;
+            *) echo "::error::未知 proxy 取值：$PROXY"; exit 1 ;;
+          esac
+
+          # 3) 广告过滤
+          case "$ADBLOCK" in
+            '无') ;;
+            'adbyby') set_opt ADBYBY y ;;
+            'koolproxy') set_opt KOOLPROXY y ;;
+            'adguardhome') set_opt ADGUARDHOME y ;;
+            *) echo "::error::未知 adblock 取值：$ADBLOCK"; exit 1 ;;
+          esac
+
+          # 4) 内网穿透
+          case "$FRP" in
+            '无') ;;
+            'frpc') set_opt FRPC y ;;
+            'frps') set_opt FRPS y ;;
+            'frpc+frps') set_opt FRPC y; set_opt FRPS y ;;
+            *) echo "::error::未知 frp 取值：$FRP"; exit 1 ;;
+          esac
+
+          # 5) 命令行工具（选“保持机型默认”则不动模板原样）
+          case "$TOOLS" in
+            '保持机型默认') ;;
+            '常用工具'*)
+              for k in HTOP NANO SOCAT TCPDUMP MTR; do set_opt "$k" y; done ;;
+            '全部工具'*)
+              for k in HTOP NANO SOCAT TCPDUMP MTR IPERF3 LRZSZ PARTED; do set_opt "$k" y; done ;;
+            *) echo "::error::未知 tools 取值：$TOOLS"; exit 1 ;;
+          esac
+
+          # 6) 布尔开关
+          for pair in "ZEROTIER:$ZEROTIER" "WIREGUARD:$WIREGUARD" \
+                      "SMARTDNS:$SMARTDNS" "TTYD:$TTYD"; do
+            k="${pair%%:*}"; v="${pair#*:}"
+            if [ "$v" = "true" ]; then set_opt "$k" y; fi
+          done
+
+          # 7) 额外开关（做格式校验，防止把乱七八糟的内容塞进 .config）
+          if [ -n "${EXTRA// /}" ]; then
+            printf '%s' "$EXTRA" | tr ',; ' '\n\n\n' > /tmp/extra_opts.txt
+            while IFS= read -r line; do
+              line="$(printf '%s' "$line" | tr -d '[:space:]')"
+              [ -z "$line" ] && continue
+              if ! printf '%s' "$line" | grep -qE '^CONFIG_FIRMWARE_INCLUDE_[A-Za-z0-9_]+=[yn]$'; then
+                echo "::error::extra 格式不对，应为 CONFIG_FIRMWARE_INCLUDE_XXX=y 或 =n：$line"
+                exit 1
+              fi
+              k="$(printf '%s' "$line" | sed -E 's/^CONFIG_FIRMWARE_INCLUDE_([A-Za-z0-9_]+)=.*/\1/')"
+              v="${line##*=}"
+              set_opt "$k" "$v"
+            done < /tmp/extra_opts.txt
+          fi
+
+          echo "==== 本次生效的功能项 ===="
+          grep -E '^CONFIG_FIRMWARE_INCLUDE_.*=y$' .config | sort
+
+      - name: 编译固件
+        run: |
+          set -o pipefail
+          cd trunk
+          sudo ./clear_tree 2>&1 | tail -5
+          sudo ./build_firmware_modify "${MODEL}" 0 > build.log 2>&1 || {
+            echo "::error::编译失败，下面是日志尾部"
+            tail -150 build.log
+            exit 1
+          }
+          echo "==== 编译完成，日志尾部 ===="
+          tail -25 build.log
+          ls -l images/ || true
+
+      - name: 整理产物
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          shopt -s nullglob
+          trx=(trunk/images/*.trx)
+          other=(trunk/images/*.bin trunk/images/*.img)
+          if [ ${#trx[@]} -eq 0 ]; then
+            echo "::error::没有生成 trx 文件"
+            ls -l trunk/images/ || true
+            exit 1
+          fi
+          for f in "${trx[@]}" "${other[@]}"; do
+            cp -f "$f" out/
+          done
+          cp -f trunk/.config "out/.config-${MODEL}.txt"
+          cd out
+          md5sum *.trx | tee md5sum.txt
+          echo "---- 产物大小 ----"
+          ls -lh *.trx
+          {
+            echo "机型: ${MODEL}"
+            echo "科学上网: ${PROXY}"
+            echo "广告过滤: ${ADBLOCK}"
+            echo "frp: ${FRP}"
+            echo "工具: ${TOOLS}"
+            echo "ZeroTier: ${ZEROTIER}  WireGuard: ${WIREGUARD}  SmartDNS: ${SMARTDNS}  ttyd: ${TTYD}"
+            echo "额外: ${EXTRA}"
+            echo "commit: ${GITHUB_SHA}"
+          } > "选择说明.txt"
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: Padavan-${{ inputs.model }}-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+
+      - name: 上传编译日志（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ inputs.model }}-${{ github.run_number }}
+          path: |
+            trunk/build.log
+          if-no-files-found: ignore
+
+      - name: 写入任务摘要
+        if: always()
+        run: |
+          {
+            echo "### 云编译 keke-Padavan"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 机型 | ${MODEL} |"
+            echo "| 科学上网 | ${PROXY} |"
+            echo "| 广告过滤 | ${ADBLOCK} |"
+            echo "| frp | ${FRP} |"
+            echo "| 工具 | ${TOOLS} |"
+            echo "| ZeroTier / WireGuard | ${ZEROTIER} / ${WIREGUARD} |"
+            echo "| SmartDNS / ttyd | ${SMARTDNS} / ${TTYD} |"
+            echo "| 额外开关 | ${EXTRA:-无} |"
+            echo ""
+            if ls out/*.trx >/dev/null 2>&1; then
+              echo "**产物**"
+              echo ""
+              echo '```'
+              ls -lh out/*.trx | awk '{print $5, $9}'
+              cat out/md5sum.txt 2>/dev/null || true
+              echo '```'
+            else
+              echo "**本次没有产出固件，请看 build-log 工件里的日志尾部。**"
+            fi
+            echo ""
+            echo "> 刷机前请确认 trx 大小不超过机型 flash 可用空间；默认 wifi: PDCN / PDCN_5G，密码 1234567890，管理地址 192.168.123.1。"
+          } >> "$GITHUB_STEP_SUMMARY"
